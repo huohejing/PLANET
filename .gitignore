@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+*Zone.Identifier
+*.swp
+*~
+.DS_Store
+result*.csv
+result*.sdf

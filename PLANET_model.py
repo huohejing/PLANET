@@ -5,24 +5,24 @@ from layers import ProteinEGNN,LigandGAT,ProLig
 from nnutils import create_var, create_var_gpu
 
 class PLANET(nn.Module):
-    def __init__(self,feature_dims,nheads,key_dims,value_dims,pro_update_inters,lig_update_iters,pro_lig_update_iters,device):
+    def __init__(self,feature_dims,nheads,key_dims,value_dims,pro_update_inters,lig_update_iters,pro_lig_update_iters,device='cpu'): # 默认改为 cpu
         super().__init__()
-        self.device = torch.device(device)
+        self.device = torch.device(device) # 确保传入的是 torch.device 对象
         self.feature_dims = feature_dims
         self.proteinegnn = ProteinEGNN(feature_dims,pro_update_inters,self.device)
         self.ligandgat = LigandGAT(feature_dims,nheads,key_dims,value_dims,lig_update_iters,self.device)
         self.prolig = ProLig(feature_dims,nheads,pro_lig_update_iters,self.device)
-
         self.ligand_interaction_loss = nn.BCELoss(reduction='sum',)
         self.pro_lig_interaction_loss = nn.BCELoss(reduction='sum')
         self.mse_loss = nn.MSELoss(reduction='none')
 
-    ###used for model training 
+    ###used for model training
     def forward(self,res_batch,mol_batch):
         (fresidues,res_map,res_scope,alpha_coordinates) = res_batch
         fresidues = fresidues.to(self.device)
         #res_map = create_var(res_map)
         alpha_coordinates = create_var(alpha_coordinates)
+
         (fatoms, fbonds, agraph, bgraph, lig_scope) = mol_batch
         fatoms = fatoms.to(self.device)
         fbonds = fbonds.to(self.device)
@@ -32,16 +32,16 @@ class PLANET(nn.Module):
         #distance_weight,res_mask = self.distance_network(fresidues,alpha_coordinates,res_scope,res_map)
         fresidues = self.proteinegnn(fresidues,alpha_coordinates,res_scope)
         fatoms = self.ligandgat(fatoms,fbonds,agraph,bgraph,lig_scope)
-         
         predicted_lig_interactions,predicted_interactions,predicted_affinities = self.prolig(fresidues,fatoms,res_scope,lig_scope)
+
         return (predicted_lig_interactions,predicted_interactions,predicted_affinities)
-    
+
     def compute_loss(self,predictions,targets,res_batch,mol_batch):
         predicted_lig_interactions,predicted_interactions,predicted_affinities = predictions
         (_,_,res_scope,_) = res_batch
         (_,_,_,_,lig_scope) = mol_batch
-
         mol_intearctions,pro_lig_interactions,pKs,pK_flags,complex_labels = targets
+
         mol_intearctions = create_var(mol_intearctions)
         pro_lig_interactions = create_var(pro_lig_interactions)
         pKs = create_var(pKs)
@@ -53,45 +53,57 @@ class PLANET(nn.Module):
             l_loss = self.ligand_interaction_loss(
                 predicted_lig_interactions[lig_interaction_count:lig_interaction_count+atom_count**2],
                 mol_intearctions[lig_interaction_count:lig_interaction_count+atom_count**2]
-                ) / atom_count
+            ) / atom_count
             pl_loss = self.pro_lig_interaction_loss(
                 predicted_interactions[pro_lig_interaction_count:pro_lig_interaction_count+atom_count*res_count],
                 pro_lig_interactions[pro_lig_interaction_count:pro_lig_interaction_count+atom_count*res_count]
-                ) / atom_count
+            ) / atom_count
+
             if complex_label == 1:
                 lig_interaction_loss.append(l_loss)
-            pro_lig_interaction_loss.append(pl_loss)
+                pro_lig_interaction_loss.append(pl_loss)
+
             lig_interaction_count += atom_count**2
             pro_lig_interaction_count += atom_count*res_count
+
         lig_interaction_loss = torch.mean(torch.stack(lig_interaction_loss))
         pro_lig_interaction_loss = torch.mean(torch.stack(pro_lig_interaction_loss))
+
         affinity_loss = torch.sum(self.mse_loss(predicted_affinities,pKs) * pK_flags) / torch.sum(pK_flags)
+
         return lig_interaction_loss,pro_lig_interaction_loss,affinity_loss
 
     @staticmethod
     def compute_metrics(predictions,targets):
         predicted_lig_interactions,predicted_interactions,predicted_affinities = predictions
         mol_intearctions,pro_lig_interactions,pKs,pK_flags,_ = targets
+
         mol_intearctions = create_var(mol_intearctions)
         pro_lig_interactions = create_var(pro_lig_interactions)
         pKs = create_var(pKs)
         pK_flags = create_var(pK_flags)
 
         lig_interaction_result = torch.where(predicted_lig_interactions>0.5,1.,0.)
-        lig_interaction_acc = torch.mean(torch.where(lig_interaction_result==mol_intearctions,1.,0.)) 
+        lig_interaction_acc = torch.mean(torch.where(lig_interaction_result==mol_intearctions,1.,0.))
 
         pro_lig_interaction_result = torch.where(predicted_interactions>0.5,1.,0.)
         pro_lig_interaction_acc = torch.mean(torch.where(pro_lig_interaction_result==pro_lig_interactions,1.,0.))
 
         affinity_mae = torch.sum(torch.abs(predicted_affinities-pKs)* pK_flags) / torch.sum(pK_flags)
-        
+
         return lig_interaction_acc,pro_lig_interaction_acc,affinity_mae
 
     def load_parameters(self,parameters=os.path.join(os.path.dirname(os.path.abspath(__file__)),'PLANET.param')):
-        self.load_state_dict(torch.load(parameters,map_location=self.device))
-        
+        # 注意：map_location 应该与模型定义的 device 一致，或者使用字符串 'cpu'
+        # 如果 PLANET.param 文件本身就是在 GPU 上保存的，加载到 CPU 时最好指定 map_location
+        # 如果 PLANET.param 文件是在 CPU 上保存的，则不需要 map_location
+        # 这里假设 PLANET.param 是 CPU 保存的，或者需要加载到 CPU
+        self.load_state_dict(torch.load(parameters, map_location=self.device))
+
+
     ###used for screening (only one protein, different mols)
     def cal_res_features_helper(self,fresidues,coordinates):
+        # 注意：这里不再强制 .cuda()，而是使用 self.device
         fresidues = fresidues.to(self.device)
         coordinates = coordinates.to(self.device)
         fresidues = self.proteinegnn.pre_cal_res_features(fresidues,coordinates)
@@ -104,6 +116,8 @@ class PLANET(nn.Module):
 
     def screening(self,fresidues,res_scope,mol_feature_batch):
         (fatoms, fbonds, agraph, bgraph, lig_scope) = mol_feature_batch
+        # 注意：这里不再强制 .cuda()，而是让 mol_feature_batch 保持原有 device，或者根据需要移动
+        # PLANET_model 的其余部分 (proteinegnn, ligandgat, prolig) 会处理 device 问题
         fatoms = self.ligandgat(fatoms,fbonds,agraph,bgraph,lig_scope)
         _,_,predicted_affinities = self.prolig(fresidues,fatoms,res_scope,lig_scope)
         return predicted_affinities

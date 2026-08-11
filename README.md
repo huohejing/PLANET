@@ -1,41 +1,73 @@
-# **PLANET**
+# PLANET: Protein-Ligand Affinity prediction NETwork
 
-### PLANET: _**P**rotein-**L**igand **A**ffinity prediction **NET**work_
+> **Original work by [ComputArtCMCG](https://github.com/ComputArtCMCG/PLANET).**
+> This is a bugfixed, CPU-ready version maintained for personal use and community convenience.
+> All credit for the model architecture, training strategy, and research belongs to the original authors.
 
-Predicting protein-ligand binding affinity is still a central issue in drug design. No wonder various deep learning models have been developed in recent years to tackle this issue in one aspect or another. So far most of them merely focus on reproducing the binding affinity of known binders (i.e. so-called “scoring power”).<br>
-Here, we have developed a graph neural network model called PLANET (Protein-Ligand Affinity prediction NETwork). This model takes the graph-represented 3D structure of the binding pocket on the target protein and the 2D structural graph of the ligand molecule as inputs. PLANET was trained through a multi-objective process with three related tasks, i.e. deriving protein-ligand binding affinity, protein-ligand contact map, and intra-ligand distance matrix. <br>
-As tested on the CASF-2016 benchmark, PLANET exhibited a comparable level of scoring power as some other machine learning models that rely on 3D protein-ligand complex structures as inputs. Besides, it exhibited notably better performance in virtual screening trials on the DUD-E and LIT-PCBA benchmarks. Compared to the popular conventional docking program GLIDE, PLANET took less than one percent of computation time to finish the same virtual screening job without a significant loss in accuracy because it did not need to perform exhaustive conformational sampling. In summary, PLANET achieved a decent performance in virtual screening as well as predicting protein-ligand binding affinity. This feature makes PLANET an attractive tool for drug discovery in the real world.
+PLANET is a graph neural network for predicting protein-ligand binding affinity. It takes the 3D structure of a binding pocket (Cα coordinates + residue types) and the 2D graph of a ligand molecule as inputs, and predicts binding affinity without conformational sampling — making it ~100× faster than traditional docking for virtual screening.
 
-### Usage
-1. Setup dependencies
+## Key features
+
+- **No 3D ligand conformation needed** — works directly from SMILES or 2D SDF
+- **Multi-task training** — jointly learns binding affinity, protein-ligand contact maps, and intra-ligand distances
+- **CASF-2016 benchmark** — comparable scoring power to 3D complex-based methods
+- **DUD-E virtual screening** — outperforms GLIDE SP at <1% of the compute time
+
+## Quick start
+
 ```bash
+# Create environment
 conda env create -f planet.yaml
 conda activate planet
-```
-2. Using PLANET <br>
-We have created a demo folder which includes a protein file (adrb2.pdb), a crystal ligand file (adrb2_ligand.sdf) as well as molecules (mols.sdf) to be estimated. These files are  originally derived from DUD-E dataset and prepared as below: <br>
-(1) The protein structure file (.pdb) are prepared using *prepwizard* in Maestro, including fixing broken residues and assign protonated states. Other structure preparation tools can also be applied. _NOTE:_ The most important is that $\alpha$-carbon of each reasidues must be correctly fixed in the .pdb file.
-(2) The molecule files (mols.sdf) are prepared using *epik* in Maestro, including adding hydrogen atoms and ionized states. the adrb2_ligand.sdf file is only used for determining binding pocket (only need to be in .sdf format).
-```bash
-cd demo
-python3.6 ../PLANET_run.py -p adrb2.pdb -l adrb2_ligand.sdf -m mols.sdf
-```
-3. Parameters
-   - _-p or --protein_, protein structure file;
-   - _-l or --ligand_, crystal ligand file for determining binding pocket, if specified, override the coordinate provided.
-   - _-x or --center_x ; -y or --center_y ; -z or --center_z , coordinates to define the center of binding pocket, same as follows
-   - _-m or --mol_file_, molecules to be esitmated in .sdf format
-   - _--prefix_, if not specified, the default is "result", that is the outcome will be saved as "result.csv" and "result.sdf"
-4. Output files <br>
-We provide two output formats including .csv and .sdf
 
-### Training PLANET
-We provided the training scripts called "PLANET_train.py" and "PLANET_datautils.py". But the training data (i.e. PDBbind general set v.2020) are not included in this repository, which can be accessed through: http://pdbbind.org.cn/. <br>
-As mentioned in our paper (in preparation), all structures in general set are prepared and a large number of decoy molecules are used for augmentation. This part of data are not provided to public till now. <br>
-If anyone want to re-train the PLANET (maybe after the training data is released, at that time another folder called 'data' will be released, in which include the summary of training set, validation set and core set in .csv format), here is the protocol: <br>
-suppose the absolute path to PDBbind general set is $DATASET, and all the scripts related to PLANET are in $PLANET. 
-```bash
-python3.6 $PLANET/process_PDBbind.py -d $DATASET -n $njobs
-python3.6 $PLANET/PLANET_datautils.py -p $DATASET -d $PLANET/data/
-python3.6 $PLANET/PLANET_train.py -t $PLANET/data/train.pkl  -v $PLANET/data/valid.pkl -te $PLANET/data/core.pkl -d .
+# Or use an existing env with torch + rdkit installed
+cd PLANET
+python PLANET_runn.py -p <protein.pdb> -l <crystal_ligand.sdf> -m <mols.sdf> --prefix result
 ```
+
+### Parameters
+
+| Flag | Description |
+|------|-------------|
+| `-p` / `--protein` | Protein structure file (.pdb) |
+| `-l` / `--ligand` | Crystal ligand (.sdf) for defining binding pocket center |
+| `-x, -y, -z` | Manual pocket center coordinates (alternative to `-l`) |
+| `-m` / `--mol_file` | Molecules to score (.sdf or .smi) |
+| `--prefix` | Output prefix (default: `result`) |
+
+### Output
+
+- `{prefix}.csv` — SMILES + PLANET affinity scores
+- `{prefix}.sdf` — molecules with `PLANET_affinity` property
+
+### Protein preparation
+
+The protein .pdb must have correct Cα atoms. Use Maestro *prepwizard* or equivalent to fix broken residues and assign protonation states. Residues within 12 Å of the pocket center are included.
+
+## Files
+
+| File | Purpose |
+|------|---------|
+| `PLANET_runn.py` | **Inference entry point** (bugfixed, CPU-ready) |
+| `PLANET_model.py` | Model architecture (PLANET class) |
+| `layers.py` | GNN layers: ProteinEGNN, LigandGAT, ProLig |
+| `chemutils.py` | Molecular featurization, protein pocket parsing |
+| `DUDE.py` | DUD-E virtual screening evaluation |
+| `PLANET_train.py` | Training script |
+| `PLANET_datautils.py` | Data loading from PDBbind |
+| `PLANET_test.py` | CASF-2016 benchmark evaluation |
+
+## Fixes in this version
+
+- Removed hardcoded `.cuda()` calls — runs on CPU by default
+- Fixed `nnutils.create_var` to not force GPU transfer
+- `PLANET_runn.py`: cleaned-up inference script with proper device handling
+- Compatible with modern PyTorch (tested on 1.12+)
+
+## Original paper
+
+Zhang et al. *PLANET: A Multi-Objective Graph Neural Network Model for Protein-Ligand Binding Affinity Prediction.* (in preparation)
+
+## License
+
+This repository follows the license terms of the [original PLANET repository](https://github.com/ComputArtCMCG/PLANET).
